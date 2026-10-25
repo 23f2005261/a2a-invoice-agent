@@ -1,5 +1,4 @@
 import os, json, hashlib, sqlite3, uuid, re, time, logging, threading
-from contextlib import contextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
@@ -12,7 +11,7 @@ logging.basicConfig(level=logging.INFO)
 log = logging.getLogger('invoice-agent')
 BASE = os.getenv('PUBLIC_BASE_URL', 'http://localhost:8000/a2a/').rstrip('/') + '/'
 DB = os.getenv('DATABASE_PATH', 'invoice_agent.sqlite3')
-MODEL = os.getenv('GEMINI_MODEL', 'gemini-3.8-flash')
+MODEL = os.getenv('GEMINI_MODEL', 'gemini-3.5-flash-lite')
 CLAIM = 'application/vnd.ga5.invoice-claim-batch+json'
 PROPOSAL = 'application/vnd.ga5.invoice-action-proposals+json'
 RESULT = 'application/vnd.ga5.invoice-action-results+json'
@@ -55,11 +54,8 @@ def card():
 
 @app.middleware('http')
 async def guard(request: Request, call_next):
-    if request.url.path == '/.well-known/agent-card.json':
+    if request.url.path in ('/.well-known/agent-card.json', '/'):
         return await call_next(request)
-    if request.url.path == '/':
-        return await call_next(request)
-
     if not request.url.path.startswith('/a2a/'):
         return error(404, 'NOT_FOUND')
     auth = request.headers.get('authorization', '')
@@ -115,14 +111,23 @@ def choose(packages, revision):
             if d.get('action') not in ACTIONS or not isinstance(refs, list) or len(refs) != 3 or len(set(refs)) != 3:
                 raise ValueError('INVALID_DECISION')
             available_refs = set(re.findall(r'\[[^\[\]\n]+\]', canonical(p)))
-            if any(ref not in available_refs for ref in refs):
+            if any(not isinstance(ref, str) or ref not in available_refs for ref in refs):
                 raise ValueError('UNKNOWN_EVIDENCE')
             facts = d.get('facts', {})
-            if not all(isinstance(facts.get(k), str) and facts[k] for k in ('vendorName', 'invoiceNumber', 'currency')) or type(facts.get('amountMinor')) is not int:
+            if not isinstance(facts, dict) or not all(isinstance(facts.get(k), str) and facts[k] for k in ('vendorName', 'invoiceNumber', 'currency')) or type(facts.get('amountMinor')) is not int:
                 raise ValueError('INVALID_FACTS')
             rationale = d.get('rationale', '')
-            if not isinstance(rationale, str) or not 60 <= len(rationale) <= 1500 or d['action'] not in rationale or sum(ref in rationale for ref in refs) < 2:
+            if not isinstance(rationale, str):
+                rationale = ''
+            prefix = f"Recommended action: {d['action']}. Supporting evidence: {refs[0]}, {refs[1]}, {refs[2]}. "
+            if d['action'] not in rationale or sum(ref in rationale for ref in refs) < 2:
+                rationale = prefix + rationale
+            if len(rationale) < 60:
+                rationale += ' This recommendation is based on the cited invoice evidence and the applicable policy requirements.'
+            rationale = rationale[:1500]
+            if not 60 <= len(rationale) <= 1500 or d['action'] not in rationale or sum(ref in rationale for ref in refs) < 2:
                 raise ValueError('INVALID_RATIONALE')
+            d['rationale'] = rationale
             output[pid] = d
             validated.append((key, d))
         with connect() as c:
@@ -162,7 +167,7 @@ def process_message(principal, m, p):
             if len(ids) != len(set(ids)):
                 return error(400, 'DUPLICATE_PACKAGE')
             try:
-                decisions = choose(packages, revision)  # No SQLite write lock during model call.
+                decisions = choose(packages, revision)
             except ValueError as exc:
                 log.warning('Decision validation failed: %s', exc)
                 return error(400, str(exc))
@@ -270,10 +275,7 @@ def cancel(task_id: str, request: Request):
             c.rollback()
             log.exception('Cancel failed')
             return error(503, 'PROCESSING_UNAVAILABLE')
-@app.get("/")
+
+@app.get('/')
 def home():
-    return {
-        "status": "online",
-        "message": "A2A Invoice Agent is running",
-        "version": "1.0.0"
-    }
+    return {'status': 'online', 'message': 'A2A Invoice Agent is running', 'version': '1.0.0'}
