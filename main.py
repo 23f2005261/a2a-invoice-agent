@@ -6,10 +6,10 @@ from google import genai
 from google.genai import types
 from dotenv import load_dotenv
 load_dotenv()
-
+import traceback
 BASE = os.getenv('PUBLIC_BASE_URL','http://localhost:8000/a2a/').rstrip('/')+'/'
 DB = os.getenv('DATABASE_PATH','/tmp/invoice_agent.sqlite3')
-MODEL = os.getenv('GEMINI_MODEL','gemini-2.5-flash')
+MODEL = os.getenv('GEMINI_MODEL', 'gemini-3.8-flash')
 CLAIM='application/vnd.ga5.invoice-claim-batch+json'
 PROPOSAL='application/vnd.ga5.invoice-action-proposals+json'
 RESULT='application/vnd.ga5.invoice-action-results+json'
@@ -151,7 +151,9 @@ async def send(request:Request):
     except ValueError as e:
         c.rollback(); return error(400,str(e))
     except Exception:
-        c.rollback(); return error(503,'PROCESSING_UNAVAILABLE')
+        traceback.print_exc()
+        c.rollback()
+        return error(503, 'PROCESSING_UNAVAILABLE')
     finally: c.close()
 
 @app.get('/a2a/tasks')
