@@ -88,7 +88,7 @@ def validate_ai_decision(d, p):
     refs = d.get('evidenceRefs')
     if d.get('action') not in ACTIONS or not isinstance(refs, list) or len(refs) != 3 or len(set(refs)) != 3:
         raise ValueError('INVALID_DECISION')
-    available_refs = set(re.findall(r'\\[[^\\[\\]\\n]+\\]', canonical(p)))
+    available_refs = set(re.findall(r'\[[^\[\]\n]+\]', canonical(p)))
     if any(not isinstance(ref, str) or ref not in available_refs for ref in refs):
         raise ValueError('UNKNOWN_EVIDENCE')
     facts = d.get('facts', {})
